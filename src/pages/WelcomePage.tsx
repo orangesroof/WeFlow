@@ -506,7 +506,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
               {dbKeyStatus && <div className="field-hint status-text">{dbKeyStatus}</div>}
               <div className="field-hint">获取密钥会自动识别最近登录的账号</div>
-              <div className="field-hint">如果获取秘钥失败 请在微信打开后等待10秒后再登录</div>
+              <div className="field-hint">点击自动获取后微信将重新启动，当页面提示可以登录微信了再点击登录</div>
             </div>
           )}
 
@@ -533,6 +533,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
               </button>
               {imageKeyStatus && <div className="field-hint status-text">{imageKeyStatus}</div>}
               <div className="field-hint">如获取失败，请先打开朋友圈图片再重试</div>
+              {isFetchingImageKey && <div className="field-hint status-text">正在扫描内存，请稍候...</div>}
             </div>
           )}
 

@@ -16,14 +16,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    exclude: [
-      '@lancedb/lancedb',
-      '@lancedb/lancedb-win32-x64-msvc',
-      'node-llama-cpp',
-      'onnxruntime-node',
-      '@xenova/transformers',
-      '@huggingface/transformers'
-    ]
+    exclude: []
   },
   plugins: [
     react(),
@@ -33,16 +26,10 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
-          rollupOptions: {
+            rollupOptions: {
               external: [
                 'better-sqlite3',
                 'koffi',
-                'node-llama-cpp',
-                '@lancedb/lancedb',
-                '@lancedb/lancedb-win32-x64-msvc',
-                'onnxruntime-node',
-                '@xenova/transformers',
-                '@huggingface/transformers',
                 'fsevents'
               ]
             }
@@ -57,40 +44,10 @@ export default defineConfig({
             rollupOptions: {
               external: [
                 'koffi',
-                'node-llama-cpp',
-                '@lancedb/lancedb',
-                '@lancedb/lancedb-win32-x64-msvc',
-                'onnxruntime-node',
-                '@xenova/transformers',
-                '@huggingface/transformers',
                 'fsevents'
               ],
               output: {
                 entryFileNames: 'annualReportWorker.js',
-                inlineDynamicImports: true
-              }
-            }
-          }
-        }
-      },
-      {
-        entry: 'electron/cloneEmbeddingWorker.ts',
-        vite: {
-          build: {
-            outDir: 'dist-electron',
-            rollupOptions: {
-              external: [
-                'koffi',
-                'node-llama-cpp',
-                '@lancedb/lancedb',
-                '@lancedb/lancedb-win32-x64-msvc',
-                'onnxruntime-node',
-                '@xenova/transformers',
-                '@huggingface/transformers',
-                'fsevents'
-              ],
-              output: {
-                entryFileNames: 'cloneEmbeddingWorker.js',
                 inlineDynamicImports: true
               }
             }
@@ -105,6 +62,25 @@ export default defineConfig({
             rollupOptions: {
               output: {
                 entryFileNames: 'imageSearchWorker.js',
+                inlineDynamicImports: true
+              }
+            }
+          }
+        }
+      },
+      {
+        entry: 'electron/wcdbWorker.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: [
+                'better-sqlite3',
+                'koffi',
+                'fsevents'
+              ],
+              output: {
+                entryFileNames: 'wcdbWorker.js',
                 inlineDynamicImports: true
               }
             }

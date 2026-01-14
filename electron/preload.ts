@@ -69,7 +69,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('wcdb:testConnection', dbPath, hexKey, wxid),
     open: (dbPath: string, hexKey: string, wxid: string) =>
       ipcRenderer.invoke('wcdb:open', dbPath, hexKey, wxid),
-    close: () => ipcRenderer.invoke('wcdb:close')
+    close: () => ipcRenderer.invoke('wcdb:close'),
+
   },
 
   // 密钥获取

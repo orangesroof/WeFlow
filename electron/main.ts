@@ -382,6 +382,8 @@ function registerIpcHandlers() {
     return true
   })
 
+
+
   // 聊天相关
   ipcMain.handle('chat:connect', async () => {
     return chatService.connect()
@@ -468,8 +470,8 @@ function registerIpcHandlers() {
   })
 
   // 数据分析相关
-  ipcMain.handle('analytics:getOverallStatistics', async () => {
-    return analyticsService.getOverallStatistics()
+  ipcMain.handle('analytics:getOverallStatistics', async (_, force?: boolean) => {
+    return analyticsService.getOverallStatistics(force)
   })
 
   ipcMain.handle('analytics:getContactRankings', async (_, limit?: number) => {

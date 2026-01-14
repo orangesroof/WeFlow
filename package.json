@@ -1,12 +1,12 @@
 {
   "name": "weflow",
-  "version": "1.0.4",
-  "description": "WeFlow - 微信聊天记录查看工具",
+  "version": "1.1.0",
+  "description": "WeFlow",
   "main": "dist-electron/main.js",
   "author": "cc",
   "scripts": {
-    "postinstall": "electron-rebuild -f -w @lancedb/lancedb,onnxruntime-node",
-    "rebuild": "electron-rebuild -f -w @lancedb/lancedb,onnxruntime-node",
+    "postinstall": "echo 'No native modules to rebuild'",
+    "rebuild": "echo 'No native modules to rebuild'",
     "dev": "vite",
     "build": "vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
@@ -14,8 +14,6 @@
     "electron:build": "npm run build"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.23.1-beta.1",
-    "@lancedb/lancedb-win32-x64-msvc": "^0.22.3",
     "better-sqlite3": "^12.5.0",
     "echarts": "^5.5.1",
     "echarts-for-react": "^3.0.2",
@@ -27,7 +25,6 @@
     "jszip": "^3.10.1",
     "koffi": "^2.9.0",
     "lucide-react": "^0.562.0",
-    "onnxruntime-node": "^1.16.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.1.1",
@@ -51,10 +48,6 @@
   },
   "build": {
     "appId": "com.WeFlow.app",
-    "asarUnpack": [
-      "**/node_modules/@lancedb/lancedb/**/*",
-      "**/node_modules/onnxruntime-node/**/*"
-    ],
     "publish": {
       "provider": "github",
       "releaseType": "release"

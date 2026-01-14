@@ -459,7 +459,7 @@ class ExportService {
 
     const [displayNames, avatarUrls] = await Promise.all([
       wcdbService.getDisplayNames(Array.from(lookupUsernames)),
-      includeAvatars ? wcdbService.getAvatarUrls(Array.from(lookupUsernames)) : Promise.resolve({ success: true, map: {} })
+      includeAvatars ? wcdbService.getAvatarUrls(Array.from(lookupUsernames)) : Promise.resolve({ success: true, map: {} as Record<string, string> })
     ])
 
     for (const member of rawMembers) {
@@ -590,7 +590,11 @@ class ExportService {
           }
         }
         if (!data) continue
-        const finalMime = mime || this.inferImageMime(fileInfo.ext)
+
+        // 优先使用内容检测出的 MIME 类型
+        const detectedMime = this.detectMimeType(data)
+        const finalMime = detectedMime || mime || this.inferImageMime(fileInfo.ext)
+
         const base64 = data.toString('base64')
         result.set(member.username, `data:${finalMime};base64,${base64}`)
       } catch {
@@ -599,6 +603,39 @@ class ExportService {
     }
 
     return result
+  }
+
+  private detectMimeType(buffer: Buffer): string | null {
+    if (buffer.length < 4) return null
+
+    // PNG: 89 50 4E 47
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+      return 'image/png'
+    }
+
+    // JPEG: FF D8 FF
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+      return 'image/jpeg'
+    }
+
+    // GIF: 47 49 46 38
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+      return 'image/gif'
+    }
+
+    // WEBP: RIFF ... WEBP
+    if (buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+      return 'image/webp'
+    }
+
+    // BMP: 42 4D
+    if (buffer[0] === 0x42 && buffer[1] === 0x4D) {
+      return 'image/bmp'
+    }
+
+    return null
   }
 
   private inferImageMime(ext: string): string {
@@ -659,7 +696,8 @@ class ExportService {
       const chatLabMessages: ChatLabMessage[] = allMessages.map((msg) => {
         const memberInfo = collected.memberSet.get(msg.senderUsername)?.member || {
           platformId: msg.senderUsername,
-          accountName: msg.senderUsername
+          accountName: msg.senderUsername,
+          groupNickname: undefined
         }
         return {
           sender: msg.senderUsername,
@@ -811,7 +849,8 @@ class ExportService {
           displayName: sessionInfo.displayName,
           type: isGroup ? '群聊' : '私聊',
           lastTimestamp: collected.lastTime,
-          messageCount: allMessages.length
+          messageCount: allMessages.length,
+          avatar: undefined as string | undefined
         },
         messages: allMessages
       }

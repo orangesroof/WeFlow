@@ -7,6 +7,7 @@ import WelcomePage from './pages/WelcomePage'
 import HomePage from './pages/HomePage'
 import ChatPage from './pages/ChatPage'
 import AnalyticsPage from './pages/AnalyticsPage'
+import AnalyticsWelcomePage from './pages/AnalyticsWelcomePage'
 import AnnualReportPage from './pages/AnnualReportPage'
 import AnnualReportWindow from './pages/AnnualReportWindow'
 import AgreementPage from './pages/AgreementPage'
@@ -308,7 +309,8 @@ function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/home" element={<HomePage />} />
               <Route path="/chat" element={<ChatPage />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/analytics" element={<AnalyticsWelcomePage />} />
+              <Route path="/analytics/view" element={<AnalyticsPage />} />
               <Route path="/group-analytics" element={<GroupAnalyticsPage />} />
               <Route path="/annual-report" element={<AnnualReportPage />} />
               <Route path="/annual-report/view" element={<AnnualReportWindow />} />

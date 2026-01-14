@@ -667,24 +667,24 @@ class ChatService {
 
     const messages: Message[] = []
     for (const row of rows) {
-      const content = this.decodeMessageContent(
-        this.getRowField(row, [
-          'message_content',
-          'messageContent',
-          'content',
-          'msg_content',
-          'msgContent',
-          'WCDB_CT_message_content',
-          'WCDB_CT_messageContent'
-        ]),
-        this.getRowField(row, [
-          'compress_content',
-          'compressContent',
-          'compressed_content',
-          'WCDB_CT_compress_content',
-          'WCDB_CT_compressContent'
-        ])
-      )
+      const rawMessageContent = this.getRowField(row, [
+        'message_content',
+        'messageContent',
+        'content',
+        'msg_content',
+        'msgContent',
+        'WCDB_CT_message_content',
+        'WCDB_CT_messageContent'
+      ]);
+      const rawCompressContent = this.getRowField(row, [
+        'compress_content',
+        'compressContent',
+        'compressed_content',
+        'WCDB_CT_compress_content',
+        'WCDB_CT_compressContent'
+      ]);
+
+      const content = this.decodeMessageContent(rawMessageContent, rawCompressContent);
       const localType = this.getRowInt(row, ['local_type', 'localType', 'type', 'msg_type', 'msgType', 'WCDB_CT_local_type'], 1)
       const isSendRaw = this.getRowField(row, ['computed_is_send', 'computedIsSend', 'is_send', 'isSend', 'WCDB_CT_is_send'])
       let isSend = isSendRaw === null ? null : parseInt(isSendRaw, 10)
@@ -696,6 +696,16 @@ class ChatService {
         const expectedIsSend = (senderLower === myWxidLower || senderLower === cleanedWxidLower) ? 1 : 0
         if (isSend === null) {
           isSend = expectedIsSend
+          // [DEBUG] Issue #34: 记录 isSend 推断过程
+          if (expectedIsSend === 0 && localType === 1) {
+            // 仅在被判为接收且是文本消息时记录，避免刷屏
+            // console.log(`[ChatService] inferred isSend=0: sender=${senderUsername}, myWxid=${myWxid} (cleaned=${cleanedWxid})`)
+          }
+        }
+      } else if (senderUsername && !myWxid) {
+        // [DEBUG] Issue #34: 未配置 myWxid，无法判断是否发送
+        if (messages.length < 5) {
+          console.warn(`[ChatService] Warning: myWxid not set. Cannot determine if message is sent by me. sender=${senderUsername}`)
         }
       }
 
@@ -1481,9 +1491,9 @@ class ChatService {
    */
   private decodeMessageContent(messageContent: any, compressContent: any): string {
     // 优先使用 compress_content
-    let content = this.decodeMaybeCompressed(compressContent)
+    let content = this.decodeMaybeCompressed(compressContent, 'compress_content')
     if (!content || content.length === 0) {
-      content = this.decodeMaybeCompressed(messageContent)
+      content = this.decodeMaybeCompressed(messageContent, 'message_content')
     }
     return content
   }
@@ -1491,12 +1501,14 @@ class ChatService {
   /**
    * 尝试解码可能压缩的内容
    */
-  private decodeMaybeCompressed(raw: any): string {
+  private decodeMaybeCompressed(raw: any, fieldName: string = 'unknown'): string {
     if (!raw) return ''
+
+    // console.log(`[ChatService] Decoding ${fieldName}: type=${typeof raw}`, raw)
 
     // 如果是 Buffer/Uint8Array
     if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) {
-      return this.decodeBinaryContent(Buffer.from(raw))
+      return this.decodeBinaryContent(Buffer.from(raw), String(raw))
     }
 
     // 如果是字符串
@@ -1507,7 +1519,9 @@ class ChatService {
       if (this.looksLikeHex(raw)) {
         const bytes = Buffer.from(raw, 'hex')
         if (bytes.length > 0) {
-          return this.decodeBinaryContent(bytes)
+          const result = this.decodeBinaryContent(bytes, raw)
+          // console.log(`[ChatService] HEX decoded result: ${result}`)
+          return result
         }
       }
 
@@ -1515,7 +1529,7 @@ class ChatService {
       if (this.looksLikeBase64(raw)) {
         try {
           const bytes = Buffer.from(raw, 'base64')
-          return this.decodeBinaryContent(bytes)
+          return this.decodeBinaryContent(bytes, raw)
         } catch { }
       }
 
@@ -1529,7 +1543,7 @@ class ChatService {
   /**
    * 解码二进制内容（处理 zstd 压缩）
    */
-  private decodeBinaryContent(data: Buffer): string {
+  private decodeBinaryContent(data: Buffer, fallbackValue?: string): string {
     if (data.length === 0) return ''
 
     try {
@@ -1556,10 +1570,16 @@ class ChatService {
         return decoded.replace(/\uFFFD/g, '')
       }
 
+      // 如果提供了 fallbackValue，且解码结果看起来像二进制垃圾，则返回 fallbackValue
+      if (fallbackValue && replacementCount > 0) {
+        // console.log(`[ChatService] Binary garbage detected, using fallback: ${fallbackValue}`)
+        return fallbackValue
+      }
+
       // 尝试 latin1 解码
       return data.toString('latin1')
     } catch {
-      return ''
+      return fallbackValue || ''
     }
   }
 
