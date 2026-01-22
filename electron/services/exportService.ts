@@ -84,7 +84,32 @@ export interface ExportProgress {
   current: number
   total: number
   currentSession: string
-  phase: 'preparing' | 'exporting' | 'writing' | 'complete'
+  phase: 'preparing' | 'exporting' | 'exporting-media' | 'exporting-voice' | 'writing' | 'complete'
+}
+
+// 并发控制：限制同时执行的 Promise 数量
+async function parallelLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let currentIndex = 0
+
+  async function runNext(): Promise<void> {
+    while (currentIndex < items.length) {
+      const index = currentIndex++
+      results[index] = await fn(items[index], index)
+    }
+  }
+
+  // 启动 limit 个并发任务
+  const workers = Array(Math.min(limit, items.length))
+    .fill(null)
+    .map(() => runNext())
+
+  await Promise.all(workers)
+  return results
 }
 
 class ExportService {
@@ -1122,7 +1147,7 @@ class ExportService {
   }
 
   /**
-   * 导出单个会话为 ChatLab 格式
+   * 导出单个会话为 ChatLab 格式（并行优化版本）
    */
   async exportSessionToChatLab(
     sessionId: string,
@@ -1154,50 +1179,100 @@ class ExportService {
 
       allMessages.sort((a, b) => a.createTime - b.createTime)
 
+      const { exportMediaEnabled, mediaRootDir, mediaRelativePrefix } = this.getMediaLayout(outputPath, options)
+
+      // ========== 阶段1：并行导出媒体文件 ==========
+      const mediaMessages = exportMediaEnabled
+        ? allMessages.filter(msg => {
+            const t = msg.localType
+            return (t === 3 && options.exportImages) ||   // 图片
+                   (t === 47 && options.exportEmojis) ||  // 表情
+                   (t === 34 && options.exportVoices && !options.exportVoiceAsText)  // 语音文件（非转文字）
+          })
+        : []
+
+      const mediaCache = new Map<string, MediaExportItem | null>()
+
+      if (mediaMessages.length > 0) {
+        onProgress?.({
+          current: 20,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-media'
+        })
+
+        // 并行导出媒体，限制 8 个并发
+        const MEDIA_CONCURRENCY = 8
+        await parallelLimit(mediaMessages, MEDIA_CONCURRENCY, async (msg) => {
+          const mediaKey = `${msg.localType}_${msg.localId}`
+          if (!mediaCache.has(mediaKey)) {
+            const mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
+              exportImages: options.exportImages,
+              exportVoices: options.exportVoices,
+              exportEmojis: options.exportEmojis,
+              exportVoiceAsText: options.exportVoiceAsText
+            })
+            mediaCache.set(mediaKey, mediaItem)
+          }
+        })
+      }
+
+      // ========== 阶段2：并行语音转文字 ==========
+      const voiceMessages = options.exportVoiceAsText
+        ? allMessages.filter(msg => msg.localType === 34)
+        : []
+
+      const voiceTranscriptMap = new Map<number, string>()
+
+      if (voiceMessages.length > 0) {
+        onProgress?.({
+          current: 40,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-voice'
+        })
+
+        // 并行转写语音，限制 4 个并发（转写比较耗资源）
+        const VOICE_CONCURRENCY = 4
+        await parallelLimit(voiceMessages, VOICE_CONCURRENCY, async (msg) => {
+          const transcript = await this.transcribeVoice(sessionId, String(msg.localId))
+          voiceTranscriptMap.set(msg.localId, transcript)
+        })
+      }
+
+      // ========== 阶段3：构建消息列表 ==========
       onProgress?.({
-        current: 50,
+        current: 60,
         total: 100,
         currentSession: sessionInfo.displayName,
         phase: 'exporting'
       })
 
-        const { exportMediaEnabled, mediaRootDir, mediaRelativePrefix } = this.getMediaLayout(outputPath, options)
-        const mediaCache = new Map<string, MediaExportItem | null>()
-        const chatLabMessages: ChatLabMessage[] = []
-        for (const msg of allMessages) {
-          const memberInfo = collected.memberSet.get(msg.senderUsername)?.member || {
-            platformId: msg.senderUsername,
-            accountName: msg.senderUsername,
-            groupNickname: undefined
-          }
-
-          let content = this.parseMessageContent(msg.content, msg.localType)
-          if (exportMediaEnabled) {
-            const mediaKey = `${msg.localType}_${msg.localId}`
-            if (!mediaCache.has(mediaKey)) {
-              const mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
-                exportImages: options.exportImages,
-                exportVoices: options.exportVoices,
-                exportEmojis: options.exportEmojis,
-                exportVoiceAsText: options.exportVoiceAsText
-              })
-              mediaCache.set(mediaKey, mediaItem)
-            }
-          }
-          if (msg.localType === 34 && options.exportVoiceAsText) {
-            // 如果是语音消息且开启了转文字
-            content = await this.transcribeVoice(sessionId, String(msg.localId))
-          }
-
-          chatLabMessages.push({
-            sender: msg.senderUsername,
-            accountName: memberInfo.accountName,
-            groupNickname: memberInfo.groupNickname,
-            timestamp: msg.createTime,
-            type: this.convertMessageType(msg.localType, msg.content),
-            content: content
-          })
+      const chatLabMessages: ChatLabMessage[] = allMessages.map(msg => {
+        const memberInfo = collected.memberSet.get(msg.senderUsername)?.member || {
+          platformId: msg.senderUsername,
+          accountName: msg.senderUsername,
+          groupNickname: undefined
         }
+
+        // 确定消息内容
+        let content: string | null
+        if (msg.localType === 34 && options.exportVoiceAsText) {
+          // 使用预先转写的文字
+          content = voiceTranscriptMap.get(msg.localId) || '[语音消息 - 转文字失败]'
+        } else {
+          content = this.parseMessageContent(msg.content, msg.localType)
+        }
+
+        return {
+          sender: msg.senderUsername,
+          accountName: memberInfo.accountName,
+          groupNickname: memberInfo.groupNickname,
+          timestamp: msg.createTime,
+          type: this.convertMessageType(msg.localType, msg.content),
+          content: content
+        }
+      })
 
       const avatarMap = options.exportAvatars
         ? await this.exportAvatars(
@@ -1265,7 +1340,7 @@ class ExportService {
   }
 
   /**
-   * 导出单个会话为详细 JSON 格式（原项目格式）
+   * 导出单个会话为详细 JSON 格式（原项目格式）- 并行优化版本
    */
   async exportSessionToDetailedJson(
     sessionId: string,
@@ -1290,41 +1365,95 @@ class ExportService {
         phase: 'preparing'
       })
 
-        const collected = await this.collectMessages(sessionId, cleanedMyWxid, options.dateRange)
-        const { exportMediaEnabled, mediaRootDir, mediaRelativePrefix } = this.getMediaLayout(outputPath, options)
-        const mediaCache = new Map<string, MediaExportItem | null>()
-        const allMessages: any[] = []
+      const collected = await this.collectMessages(sessionId, cleanedMyWxid, options.dateRange)
+      const { exportMediaEnabled, mediaRootDir, mediaRelativePrefix } = this.getMediaLayout(outputPath, options)
 
-        for (const msg of collected.rows) {
-          const senderInfo = await this.getContactInfo(msg.senderUsername)
-          const sourceMatch = /<msgsource>[\s\S]*?<\/msgsource>/i.exec(msg.content || '')
-          const source = sourceMatch ? sourceMatch[0] : ''
+      // ========== 阶段1：并行导出媒体文件 ==========
+      const mediaMessages = exportMediaEnabled
+        ? collected.rows.filter(msg => {
+            const t = msg.localType
+            return (t === 3 && options.exportImages) ||
+                   (t === 47 && options.exportEmojis) ||
+                   (t === 34 && options.exportVoices && !options.exportVoiceAsText)
+          })
+        : []
 
-          let content = this.parseMessageContent(msg.content, msg.localType)
-          let mediaItem: MediaExportItem | null = null
-          if (exportMediaEnabled) {
-            const mediaKey = `${msg.localType}_${msg.localId}`
-            if (mediaCache.has(mediaKey)) {
-              mediaItem = mediaCache.get(mediaKey) || null
-            } else {
-              mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
-                exportImages: options.exportImages,
-                exportVoices: options.exportVoices,
-                exportEmojis: options.exportEmojis,
-                exportVoiceAsText: options.exportVoiceAsText
-              })
-              mediaCache.set(mediaKey, mediaItem)
-            }
+      const mediaCache = new Map<string, MediaExportItem | null>()
+
+      if (mediaMessages.length > 0) {
+        onProgress?.({
+          current: 15,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-media'
+        })
+
+        const MEDIA_CONCURRENCY = 8
+        await parallelLimit(mediaMessages, MEDIA_CONCURRENCY, async (msg) => {
+          const mediaKey = `${msg.localType}_${msg.localId}`
+          if (!mediaCache.has(mediaKey)) {
+            const mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
+              exportImages: options.exportImages,
+              exportVoices: options.exportVoices,
+              exportEmojis: options.exportEmojis,
+              exportVoiceAsText: options.exportVoiceAsText
+            })
+            mediaCache.set(mediaKey, mediaItem)
           }
-          if (mediaItem) {
-            content = mediaItem.relativePath
-          } else if (msg.localType === 34 && options.exportVoiceAsText) {
-            content = await this.transcribeVoice(sessionId, String(msg.localId))
-          }
+        })
+      }
 
-          allMessages.push({
-            localId: allMessages.length + 1,
-            createTime: msg.createTime,
+      // ========== 阶段2：并行语音转文字 ==========
+      const voiceMessages = options.exportVoiceAsText
+        ? collected.rows.filter(msg => msg.localType === 34)
+        : []
+
+      const voiceTranscriptMap = new Map<number, string>()
+
+      if (voiceMessages.length > 0) {
+        onProgress?.({
+          current: 35,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-voice'
+        })
+
+        const VOICE_CONCURRENCY = 4
+        await parallelLimit(voiceMessages, VOICE_CONCURRENCY, async (msg) => {
+          const transcript = await this.transcribeVoice(sessionId, String(msg.localId))
+          voiceTranscriptMap.set(msg.localId, transcript)
+        })
+      }
+
+      // ========== 阶段3：构建消息列表 ==========
+      onProgress?.({
+        current: 55,
+        total: 100,
+        currentSession: sessionInfo.displayName,
+        phase: 'exporting'
+      })
+
+      const allMessages: any[] = []
+      for (const msg of collected.rows) {
+        const senderInfo = await this.getContactInfo(msg.senderUsername)
+        const sourceMatch = /<msgsource>[\s\S]*?<\/msgsource>/i.exec(msg.content || '')
+        const source = sourceMatch ? sourceMatch[0] : ''
+
+        let content: string | null
+        const mediaKey = `${msg.localType}_${msg.localId}`
+        const mediaItem = mediaCache.get(mediaKey)
+
+        if (mediaItem) {
+          content = mediaItem.relativePath
+        } else if (msg.localType === 34 && options.exportVoiceAsText) {
+          content = voiceTranscriptMap.get(msg.localId) || '[语音消息 - 转文字失败]'
+        } else {
+          content = this.parseMessageContent(msg.content, msg.localType)
+        }
+
+        allMessages.push({
+          localId: allMessages.length + 1,
+          createTime: msg.createTime,
           formattedTime: this.formatTimestamp(msg.createTime),
           type: this.getMessageTypeName(msg.localType),
           localType: msg.localType,
@@ -1550,20 +1679,31 @@ class ExportService {
       // 媒体导出设置
       const { exportMediaEnabled, mediaRootDir, mediaRelativePrefix } = this.getMediaLayout(outputPath, options)
 
-      // 媒体导出缓存
+      // ========== 并行预处理：媒体文件 ==========
+      const mediaMessages = exportMediaEnabled
+        ? sortedMessages.filter(msg => {
+            const t = msg.localType
+            return (t === 3 && options.exportImages) ||
+                   (t === 47 && options.exportEmojis) ||
+                   (t === 34 && options.exportVoices && !options.exportVoiceAsText)
+          })
+        : []
+
       const mediaCache = new Map<string, MediaExportItem | null>()
 
-      for (let i = 0; i < sortedMessages.length; i++) {
-        const msg = sortedMessages[i]
+      if (mediaMessages.length > 0) {
+        onProgress?.({
+          current: 35,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-media'
+        })
 
-        // 导出媒体文件
-        let mediaItem: MediaExportItem | null = null
-        if (exportMediaEnabled) {
+        const MEDIA_CONCURRENCY = 8
+        await parallelLimit(mediaMessages, MEDIA_CONCURRENCY, async (msg) => {
           const mediaKey = `${msg.localType}_${msg.localId}`
-          if (mediaCache.has(mediaKey)) {
-            mediaItem = mediaCache.get(mediaKey) || null
-          } else {
-            mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
+          if (!mediaCache.has(mediaKey)) {
+            const mediaItem = await this.exportMediaForMessage(msg, sessionId, mediaRootDir, mediaRelativePrefix, {
               exportImages: options.exportImages,
               exportVoices: options.exportVoices,
               exportEmojis: options.exportEmojis,
@@ -1571,7 +1711,45 @@ class ExportService {
             })
             mediaCache.set(mediaKey, mediaItem)
           }
-        }
+        })
+      }
+
+      // ========== 并行预处理：语音转文字 ==========
+      const voiceMessages = options.exportVoiceAsText
+        ? sortedMessages.filter(msg => msg.localType === 34)
+        : []
+
+      const voiceTranscriptMap = new Map<number, string>()
+
+      if (voiceMessages.length > 0) {
+        onProgress?.({
+          current: 50,
+          total: 100,
+          currentSession: sessionInfo.displayName,
+          phase: 'exporting-voice'
+        })
+
+        const VOICE_CONCURRENCY = 4
+        await parallelLimit(voiceMessages, VOICE_CONCURRENCY, async (msg) => {
+          const transcript = await this.transcribeVoice(sessionId, String(msg.localId))
+          voiceTranscriptMap.set(msg.localId, transcript)
+        })
+      }
+
+      onProgress?.({
+        current: 65,
+        total: 100,
+        currentSession: sessionInfo.displayName,
+        phase: 'exporting'
+      })
+
+      // ========== 写入 Excel 行 ==========
+      for (let i = 0; i < sortedMessages.length; i++) {
+        const msg = sortedMessages[i]
+
+        // 从缓存获取媒体信息
+        const mediaKey = `${msg.localType}_${msg.localId}`
+        const mediaItem = mediaCache.get(mediaKey) || null
 
         // 确定发送者信息
         let senderRole: string
@@ -1620,12 +1798,15 @@ class ExportService {
         const row = worksheet.getRow(currentRow)
         row.height = 24
 
-        // 确定内容：如果有媒体文件导出成功则显示相对路径，否则显示解析后的内容
-        let contentValue = mediaItem
-          ? mediaItem.relativePath
-          : (this.parseMessageContent(msg.content, msg.localType) || '')
-        if (!mediaItem && msg.localType === 34 && options.exportVoiceAsText) {
-          contentValue = await this.transcribeVoice(sessionId, String(msg.localId))
+        // 确定内容：优先使用预处理的缓存
+        let contentValue: string
+        if (mediaItem) {
+          contentValue = mediaItem.relativePath
+        } else if (msg.localType === 34 && options.exportVoiceAsText) {
+          // 使用预处理的语音转文字结果
+          contentValue = voiceTranscriptMap.get(msg.localId) || '[语音消息 - 转文字失败]'
+        } else {
+          contentValue = this.parseMessageContent(msg.content, msg.localType) || ''
         }
 
         // 调试日志
