@@ -1501,6 +1501,10 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, o
   const imageClickTimerRef = useRef<number | null>(null)
   const imageContainerRef = useRef<HTMLDivElement>(null)
   const imageAutoDecryptTriggered = useRef(false)
+  const imageAutoHdTriggered = useRef<string | null>(null)
+  const [imageInView, setImageInView] = useState(false)
+  const imageForceHdAttempted = useRef<string | null>(null)
+  const imageForceHdPending = useRef(false)
   const [voiceError, setVoiceError] = useState(false)
   const [voiceLoading, setVoiceLoading] = useState(false)
   const [isVoicePlaying, setIsVoicePlaying] = useState(false)
@@ -1697,10 +1701,13 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, o
     }
   }, [isEmoji, message.emojiCdnUrl, emojiLocalPath, emojiLoading, emojiError])
 
-  const requestImageDecrypt = useCallback(async (forceUpdate = false) => {
-    if (!isImage || imageLoading) return
-    setImageLoading(true)
-    setImageError(false)
+  const requestImageDecrypt = useCallback(async (forceUpdate = false, silent = false) => {
+    if (!isImage) return
+    if (imageLoading) return
+    if (!silent) {
+      setImageLoading(true)
+      setImageError(false)
+    }
     try {
       if (message.imageMd5 || message.imageDatName) {
         const result = await window.electronAPI.image.decrypt({
@@ -1726,13 +1733,24 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, o
         setImageHasUpdate(false)
         return
       }
-      setImageError(true)
+      if (!silent) setImageError(true)
     } catch {
-      setImageError(true)
+      if (!silent) setImageError(true)
     } finally {
-      setImageLoading(false)
+      if (!silent) setImageLoading(false)
     }
   }, [isImage, imageLoading, message.imageMd5, message.imageDatName, message.localId, session.username, imageCacheKey, detectImageMimeFromBase64])
+
+  const triggerForceHd = useCallback(() => {
+    if (!message.imageMd5 && !message.imageDatName) return
+    if (imageForceHdAttempted.current === imageCacheKey) return
+    if (imageForceHdPending.current) return
+    imageForceHdAttempted.current = imageCacheKey
+    imageForceHdPending.current = true
+    requestImageDecrypt(true, true).finally(() => {
+      imageForceHdPending.current = false
+    })
+  }, [imageCacheKey, message.imageDatName, message.imageMd5, requestImageDecrypt])
 
   const handleImageClick = useCallback(() => {
     if (imageClickTimerRef.current) {
@@ -1845,6 +1863,47 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, o
     observer.observe(container)
     return () => observer.disconnect()
   }, [isImage, imageLocalPath, message.imageMd5, message.imageDatName, requestImageDecrypt])
+
+  // 进入视野时自动尝试切换高清图
+  useEffect(() => {
+    if (!isImage) return
+    const container = imageContainerRef.current
+    if (!container) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        setImageInView(entry.isIntersecting)
+      },
+      { rootMargin: '120px', threshold: 0 }
+    )
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [isImage])
+
+  useEffect(() => {
+    if (!isImage || !imageHasUpdate || !imageInView) return
+    if (imageAutoHdTriggered.current === imageCacheKey) return
+    imageAutoHdTriggered.current = imageCacheKey
+    triggerForceHd()
+  }, [isImage, imageHasUpdate, imageInView, imageCacheKey, triggerForceHd])
+
+  useEffect(() => {
+    if (!isImage || !showImagePreview || !imageHasUpdate) return
+    if (imageAutoHdTriggered.current === imageCacheKey) return
+    imageAutoHdTriggered.current = imageCacheKey
+    triggerForceHd()
+  }, [isImage, showImagePreview, imageHasUpdate, imageCacheKey, triggerForceHd])
+
+  // 更激进：进入视野/打开预览时，无论 hasUpdate 与否都尝试强制高清
+  useEffect(() => {
+    if (!isImage || !imageInView) return
+    triggerForceHd()
+  }, [isImage, imageInView, triggerForceHd])
+
+  useEffect(() => {
+    if (!isImage || !showImagePreview) return
+    triggerForceHd()
+  }, [isImage, showImagePreview, triggerForceHd])
 
 
   useEffect(() => {
@@ -2196,23 +2255,15 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, o
                   src={imageLocalPath}
                   alt="图片"
                   className="image-message"
-                  onClick={() => setShowImagePreview(true)}
+                  onClick={() => {
+                    if (imageHasUpdate) {
+                      void requestImageDecrypt(true, true)
+                    }
+                    setShowImagePreview(true)
+                  }}
                   onLoad={() => setImageError(false)}
                   onError={() => setImageError(true)}
                 />
-                {imageHasUpdate && (
-                  <button
-                    className="image-update-button"
-                    type="button"
-                    title="发现更高清图片，点击更新"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void requestImageDecrypt(true)
-                    }}
-                  >
-                    <RefreshCw size={14} />
-                  </button>
-                )}
               </div>
               {showImagePreview && (
                 <ImagePreview src={imageLocalPath} onClose={() => setShowImagePreview(false)} />
