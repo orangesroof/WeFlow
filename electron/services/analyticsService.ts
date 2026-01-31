@@ -67,6 +67,38 @@ class AnalyticsService {
     return new Set(this.getExcludedUsernamesList())
   }
 
+  private escapeSqlValue(value: string): string {
+    return value.replace(/'/g, "''")
+  }
+
+  private async getAliasMap(usernames: string[]): Promise<Record<string, string>> {
+    const map: Record<string, string> = {}
+    if (usernames.length === 0) return map
+
+    const chunkSize = 200
+    for (let i = 0; i < usernames.length; i += chunkSize) {
+      const chunk = usernames.slice(i, i + chunkSize)
+      const inList = chunk.map((u) => `'${this.escapeSqlValue(u)}'`).join(',')
+      if (!inList) continue
+      const sql = `
+        SELECT username, alias
+        FROM contact
+        WHERE username IN (${inList})
+      `
+      const result = await wcdbService.execQuery('contact', null, sql)
+      if (!result.success || !result.rows) continue
+      for (const row of result.rows as Record<string, any>[]) {
+        const username = row.username || ''
+        const alias = row.alias || ''
+        if (username && alias) {
+          map[username] = alias
+        }
+      }
+    }
+
+    return map
+  }
+
   private cleanAccountDirName(name: string): string {
     const trimmed = name.trim()
     if (!trimmed) return trimmed
@@ -419,7 +451,7 @@ class AnalyticsService {
     }
   }
 
-  async getExcludeCandidates(): Promise<{ success: boolean; data?: Array<{ username: string; displayName: string; avatarUrl?: string }>; error?: string }> {
+  async getExcludeCandidates(): Promise<{ success: boolean; data?: Array<{ username: string; displayName: string; avatarUrl?: string; wechatId?: string }>; error?: string }> {
     try {
       const conn = await this.ensureConnected()
       if (!conn.success || !conn.cleanedWxid) return { success: false, error: conn.error }
@@ -435,9 +467,10 @@ class AnalyticsService {
       }
 
       const usernameList = Array.from(usernames)
-      const [displayNames, avatarUrls] = await Promise.all([
+      const [displayNames, avatarUrls, aliasMap] = await Promise.all([
         wcdbService.getDisplayNames(usernameList),
-        wcdbService.getAvatarUrls(usernameList)
+        wcdbService.getAvatarUrls(usernameList),
+        this.getAliasMap(usernameList)
       ])
 
       const entries = usernameList.map((username) => {
@@ -447,7 +480,9 @@ class AnalyticsService {
         const avatarUrl = avatarUrls.success && avatarUrls.map
           ? avatarUrls.map[username]
           : undefined
-        return { username, displayName, avatarUrl }
+        const alias = aliasMap[username]
+        const wechatId = alias || (!username.startsWith('wxid_') ? username : '')
+        return { username, displayName, avatarUrl, wechatId }
       })
 
       return { success: true, data: entries }

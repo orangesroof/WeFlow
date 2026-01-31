@@ -191,6 +191,7 @@ export interface ElectronAPI {
         username: string
         displayName: string
         avatarUrl?: string
+        wechatId?: string
       }>
       error?: string
     }>

@@ -11,6 +11,7 @@ interface ExcludeCandidate {
   username: string
   displayName: string
   avatarUrl?: string
+  wechatId?: string
 }
 
 const normalizeUsername = (value: string) => value.trim().toLowerCase()
@@ -167,7 +168,8 @@ function AnalyticsPage() {
     .filter((candidate) => {
       const query = excludeQuery.trim().toLowerCase()
       if (!query) return true
-      const haystack = `${candidate.displayName} ${candidate.username}`.toLowerCase()
+      const wechatId = candidate.wechatId || ''
+      const haystack = `${candidate.displayName} ${candidate.username} ${wechatId}`.toLowerCase()
       return haystack.includes(query)
     })
     .sort((a, b) => {
@@ -464,6 +466,7 @@ function AnalyticsPage() {
                 <div className="exclude-list">
                   {visibleExcludeCandidates.map((candidate) => {
                     const isChecked = draftExcluded.has(normalizeUsername(candidate.username))
+                    const wechatId = candidate.wechatId?.trim() || candidate.username
                     return (
                       <label key={candidate.username} className={`exclude-item ${isChecked ? 'active' : ''}`}>
                         <input
@@ -476,7 +479,7 @@ function AnalyticsPage() {
                         </div>
                         <div className="exclude-info">
                           <span className="exclude-name">{candidate.displayName}</span>
-                          <span className="exclude-username">{candidate.username}</span>
+                          <span className="exclude-username">{wechatId}</span>
                         </div>
                       </label>
                     )
