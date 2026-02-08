@@ -205,6 +205,13 @@ function DualReportWindow() {
   )
 
   const stripCdata = (text: string) => text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+  const compactMessageText = (text: string) => (
+    text
+      .replace(/\r\n/g, '\n')
+      .replace(/\s*\n+\s*/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  )
 
   const extractXmlText = (content: string) => {
     const titleMatch = content.match(/<title>([\s\S]*?)<\/title>/i)
@@ -219,18 +226,18 @@ function DualReportWindow() {
   }
 
   const formatMessageContent = (content?: string) => {
-    const raw = String(content || '').trim()
+    const raw = compactMessageText(String(content || '').trim())
     if (!raw) return '（空）'
 
     // 1. 尝试提取 XML 关键字段
     const titleMatch = raw.match(/<title>([\s\S]*?)<\/title>/i)
-    if (titleMatch?.[1]) return decodeEntities(stripCdata(titleMatch[1]).trim())
+    if (titleMatch?.[1]) return compactMessageText(decodeEntities(stripCdata(titleMatch[1]).trim()))
 
     const descMatch = raw.match(/<des>([\s\S]*?)<\/des>/i)
-    if (descMatch?.[1]) return decodeEntities(stripCdata(descMatch[1]).trim())
+    if (descMatch?.[1]) return compactMessageText(decodeEntities(stripCdata(descMatch[1]).trim()))
 
     const summaryMatch = raw.match(/<summary>([\s\S]*?)<\/summary>/i)
-    if (summaryMatch?.[1]) return decodeEntities(stripCdata(summaryMatch[1]).trim())
+    if (summaryMatch?.[1]) return compactMessageText(decodeEntities(stripCdata(summaryMatch[1]).trim()))
 
     // 2. 检查是否是 XML 结构
     const hasXmlTag = /<\s*[a-zA-Z]+[^>]*>/.test(raw)
@@ -241,7 +248,7 @@ function DualReportWindow() {
     // 3. 最后的尝试：移除所有 XML 标签，看是否还有有意义的文本
     const stripped = raw.replace(/<[^>]+>/g, '').trim()
     if (stripped && stripped.length > 0 && stripped.length < 50) {
-      return decodeEntities(stripped)
+      return compactMessageText(decodeEntities(stripped))
     }
 
     return '（多媒体/卡片消息）'
@@ -279,6 +286,19 @@ function DualReportWindow() {
 
   const mostActive = reportData.heatmap ? getMostActiveTime(reportData.heatmap) : null
   const responseAvgMinutes = reportData.response ? Math.max(0, Math.round(reportData.response.avg / 60)) : 0
+  const getSceneAvatarUrl = (isSentByMe: boolean) => (isSentByMe ? reportData.selfAvatarUrl : reportData.friendAvatarUrl)
+  const getSceneAvatarFallback = (isSentByMe: boolean) => (isSentByMe ? '我' : reportData.friendName.substring(0, 1))
+  const renderSceneAvatar = (isSentByMe: boolean) => {
+    const avatarUrl = getSceneAvatarUrl(isSentByMe)
+    if (avatarUrl) {
+      return (
+        <div className="scene-avatar with-image">
+          <img src={avatarUrl} alt={isSentByMe ? 'me-avatar' : 'friend-avatar'} />
+        </div>
+      )
+    }
+    return <div className="scene-avatar fallback">{getSceneAvatarFallback(isSentByMe)}</div>
+  }
 
   return (
     <div className="annual-report-window dual-report-window">
@@ -317,9 +337,7 @@ function DualReportWindow() {
                   <div className="scene-messages">
                     {firstChatMessages.map((msg, idx) => (
                       <div key={idx} className={`scene-message ${msg.isSentByMe ? 'sent' : 'received'}`}>
-                        <div className="scene-avatar">
-                          {msg.isSentByMe ? '我' : reportData.friendName.substring(0, 1)}
-                        </div>
+                        {renderSceneAvatar(msg.isSentByMe)}
                         <div className="scene-content-wrapper">
                           <div className="scene-meta">
                             {formatFullDate(msg.createTime).split(' ')[1]}
@@ -355,9 +373,7 @@ function DualReportWindow() {
                 <div className="scene-messages">
                   {yearFirstChat.firstThreeMessages.map((msg, idx) => (
                     <div key={idx} className={`scene-message ${msg.isSentByMe ? 'sent' : 'received'}`}>
-                      <div className="scene-avatar">
-                        {msg.isSentByMe ? '我' : reportData.friendName.substring(0, 1)}
-                      </div>
+                      {renderSceneAvatar(msg.isSentByMe)}
                       <div className="scene-content-wrapper">
                         <div className="scene-meta">
                           {formatFullDate(msg.createTime).split(' ')[1]}
